@@ -72,14 +72,16 @@ func TestReadFrom(t *testing.T) {
 	}
 
 	for path, metadata := range testdata {
-		if err := test(t, path, metadata); err != nil {
+		t.Run(path, func(t *testing.T) {
+			if err := test(t, path, metadata); err != nil {
 
-			// mp3 id3v11 returns an err if it doesn't find any tags
-			if err != ErrNoTagsFound && path != "without_tags/sample.mp3" {
-				t.Error(err)
+				// mp3 id3v11 returns an err if it doesn't find any tags
+				if err != ErrNoTagsFound && path != "without_tags/sample.mp3" {
+					t.Error(err)
+				}
 			}
 
-		}
+		})
 	}
 }
 
