@@ -244,13 +244,13 @@ func (f id3v2Frame) TotalFrameSize() uint {
 	return f.Size + f.HeaderSize
 }
 
-func readID3v2Frame(r io.Reader, h *id3v2Header) (*id3v2Frame, error) {
+func readID3v2Frame(r io.Reader, version Format) (*id3v2Frame, error) {
 	var err error
 	var name string
 	var size, headerSize uint
 	var flags *id3v2FrameFlags
 
-	switch h.Version {
+	switch version {
 	case ID3v2_2:
 		name, size, headerSize, err = readID3v2_2FrameHeader(r)
 
@@ -284,7 +284,7 @@ func readID3v2Frame(r io.Reader, h *id3v2Header) (*id3v2Frame, error) {
 
 	if flags != nil {
 		if flags.Compression {
-			switch h.Version {
+			switch version {
 			case ID3v2_3:
 				// No data length indicator defined.
 				if _, err := read7BitChunkedUint(r, 4); err != nil { // read 4
@@ -299,12 +299,12 @@ func readID3v2Frame(r io.Reader, h *id3v2Header) (*id3v2Frame, error) {
 				}
 
 			default:
-				return nil, fmt.Errorf("unsupported compression flag used in %v", h.Version)
+				return nil, fmt.Errorf("unsupported compression flag used in %v", version)
 			}
 		}
 
 		if flags.DataLengthIndicator {
-			if h.Version == ID3v2_3 {
+			if version == ID3v2_3 {
 				return nil, fmt.Errorf("data length indicator set but not defined for %v", ID3v2_3)
 			}
 
@@ -392,8 +392,22 @@ func readID3v2Frame(r io.Reader, h *id3v2Header) (*id3v2Frame, error) {
 		}
 		frame.Data = p
 
+	// chapter tags
+	case strings.HasPrefix(name, "CHAP"):
+		chap, err := readChapFrame(b, version)
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = chap
+
+	case name == "CTOC":
+		toc, err := readCTOCFrame(b, version)
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = toc
+
 	default:
-		// just return the raw bytes
 		frame.Data = b
 	}
 
@@ -405,7 +419,7 @@ func readID3v2Frames(r io.Reader, offset uint, h *id3v2Header) (map[string]inter
 	result := make(map[string]interface{})
 
 	for offset < h.Size {
-		frame, err := readID3v2Frame(r, h)
+		frame, err := readID3v2Frame(r, h.Version)
 		if err != nil {
 			if err == ErrIgnoreRemainingTags {
 				break
