@@ -230,172 +230,210 @@ func readID3v2_4FrameHeader(r io.Reader) (name string, size uint, headerSize uin
 	return
 }
 
+var ErrIgnoreRemainingTags = errors.New("ignore remaining tags")
+
+type id3v2Frame struct {
+	Name       string
+	Size       uint
+	HeaderSize uint
+	Flags      *id3v2FrameFlags
+	Data       interface{}
+}
+
+func (f id3v2Frame) TotalFrameSize() uint {
+	return f.Size + f.HeaderSize
+}
+
+func readID3v2Frame(r io.Reader, h *id3v2Header) (*id3v2Frame, error) {
+	var err error
+	var name string
+	var size, headerSize uint
+	var flags *id3v2FrameFlags
+
+	switch h.Version {
+	case ID3v2_2:
+		name, size, headerSize, err = readID3v2_2FrameHeader(r)
+
+	case ID3v2_3:
+		name, size, headerSize, err = readID3v2_3FrameHeader(r)
+		if err != nil {
+			return nil, err
+		}
+		flags, err = readID3v23FrameFlags(r)
+		headerSize += 2
+
+	case ID3v2_4:
+		name, size, headerSize, err = readID3v2_4FrameHeader(r)
+		if err != nil {
+			return nil, err
+		}
+		flags, err = readID3v24FrameFlags(r)
+		headerSize += 2
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// FIXME: Do we still need this?
+	// if size=0, we certainly are in a padding zone. ignore the rest of
+	// the tags
+	if size == 0 {
+		return nil, ErrIgnoreRemainingTags
+	}
+
+	if flags != nil {
+		if flags.Compression {
+			switch h.Version {
+			case ID3v2_3:
+				// No data length indicator defined.
+				if _, err := read7BitChunkedUint(r, 4); err != nil { // read 4
+					return nil, err
+				}
+				size -= 4
+
+			case ID3v2_4:
+				// Must have a data length indicator (to give the size) if compression is enabled.
+				if !flags.DataLengthIndicator {
+					return nil, errors.New("compression without data length indicator")
+				}
+
+			default:
+				return nil, fmt.Errorf("unsupported compression flag used in %v", h.Version)
+			}
+		}
+
+		if flags.DataLengthIndicator {
+			if h.Version == ID3v2_3 {
+				return nil, fmt.Errorf("data length indicator set but not defined for %v", ID3v2_3)
+			}
+
+			size, err = read7BitChunkedUint(r, 4)
+			if err != nil { // read 4
+				return nil, err
+			}
+		}
+
+		if flags.Encryption {
+			_, err = readBytes(r, 1) // read 1 byte of encryption method
+			if err != nil {
+				return nil, err
+			}
+			size--
+		}
+	}
+
+	frame := &id3v2Frame{
+		Name:       name,
+		Size:       size,
+		HeaderSize: headerSize,
+		Flags:      flags,
+	}
+
+	b, err := readBytes(r, size)
+	if err != nil {
+		return nil, err
+	}
+
+	switch {
+	case name == "TXXX" || name == "TXX":
+		t, err := readTextWithDescrFrame(b, false, true) // no lang, but enc
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = t
+
+	case name[0] == 'T':
+		txt, err := readTFrame(b)
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = txt
+
+	case name == "UFID" || name == "UFI":
+		t, err := readUFID(b)
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = t
+
+	case name == "WXXX" || name == "WXX":
+		t, err := readTextWithDescrFrame(b, false, false) // no lang, no enc
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = t
+
+	case name[0] == 'W':
+		txt, err := readWFrame(b)
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = txt
+
+	case name == "COMM" || name == "COM" || name == "USLT" || name == "ULT":
+		t, err := readTextWithDescrFrame(b, true, true) // both lang and enc
+		if err != nil {
+			return nil, fmt.Errorf("could not read %q: %v", name, err)
+		}
+		frame.Data = t
+
+	case name == "APIC":
+		p, err := readAPICFrame(b)
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = p
+
+	case name == "PIC":
+		p, err := readPICFrame(b)
+		if err != nil {
+			return nil, err
+		}
+		frame.Data = p
+
+	default:
+		// just return the raw bytes
+		frame.Data = b
+	}
+
+	return frame, nil
+}
+
 // readID3v2Frames reads ID3v2 frames from the given reader using the ID3v2Header.
 func readID3v2Frames(r io.Reader, offset uint, h *id3v2Header) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 
 	for offset < h.Size {
-		var err error
-		var name string
-		var size, headerSize uint
-		var flags *id3v2FrameFlags
-
-		switch h.Version {
-		case ID3v2_2:
-			name, size, headerSize, err = readID3v2_2FrameHeader(r)
-
-		case ID3v2_3:
-			name, size, headerSize, err = readID3v2_3FrameHeader(r)
-			if err != nil {
-				return nil, err
-			}
-			flags, err = readID3v23FrameFlags(r)
-			headerSize += 2
-
-		case ID3v2_4:
-			name, size, headerSize, err = readID3v2_4FrameHeader(r)
-			if err != nil {
-				return nil, err
-			}
-			flags, err = readID3v24FrameFlags(r)
-			headerSize += 2
-		}
-
+		frame, err := readID3v2Frame(r, h)
 		if err != nil {
-			return nil, err
+			if err == ErrIgnoreRemainingTags {
+				break
+			} else {
+				return nil, err
+			}
 		}
 
-		// FIXME: Do we still need this?
-		// if size=0, we certainly are in a padding zone. ignore the rest of
-		// the tags
-		if size == 0 {
-			break
-		}
-
-		offset += headerSize + size
+		offset += frame.TotalFrameSize()
 
 		// Avoid corrupted padding (see http://id3.org/Compliance%20Issues).
-		if !validID3Frame(h.Version, name) && offset > h.Size {
+		if !validID3Frame(h.Version, frame.Name) && offset > h.Size {
 			break
-		}
-
-		if flags != nil {
-			if flags.Compression {
-				switch h.Version {
-				case ID3v2_3:
-					// No data length indicator defined.
-					if _, err := read7BitChunkedUint(r, 4); err != nil { // read 4
-						return nil, err
-					}
-					size -= 4
-
-				case ID3v2_4:
-					// Must have a data length indicator (to give the size) if compression is enabled.
-					if !flags.DataLengthIndicator {
-						return nil, errors.New("compression without data length indicator")
-					}
-
-				default:
-					return nil, fmt.Errorf("unsupported compression flag used in %v", h.Version)
-				}
-			}
-
-			if flags.DataLengthIndicator {
-				if h.Version == ID3v2_3 {
-					return nil, fmt.Errorf("data length indicator set but not defined for %v", ID3v2_3)
-				}
-
-				size, err = read7BitChunkedUint(r, 4)
-				if err != nil { // read 4
-					return nil, err
-				}
-			}
-
-			if flags.Encryption {
-				_, err = readBytes(r, 1) // read 1 byte of encryption method
-				if err != nil {
-					return nil, err
-				}
-				size--
-			}
-		}
-
-		b, err := readBytes(r, size)
-		if err != nil {
-			return nil, err
 		}
 
 		// There can be multiple tag with the same name. Append a number to the
 		// name if there is more than one.
-		rawName := name
+		rawName := frame.Name
 		if _, ok := result[rawName]; ok {
 			for i := 0; ok; i++ {
-				rawName = name + "_" + strconv.Itoa(i)
+				rawName = frame.Name + "_" + strconv.Itoa(i)
 				_, ok = result[rawName]
 			}
 		}
 
-		switch {
-		case name == "TXXX" || name == "TXX":
-			t, err := readTextWithDescrFrame(b, false, true) // no lang, but enc
-			if err != nil {
-				return nil, err
-			}
-			result[rawName] = t
-
-		case name[0] == 'T':
-			txt, err := readTFrame(b)
-			if err != nil {
-				return nil, err
-			}
-			result[rawName] = txt
-
-		case name == "UFID" || name == "UFI":
-			t, err := readUFID(b)
-			if err != nil {
-				return nil, err
-			}
-			result[rawName] = t
-
-		case name == "WXXX" || name == "WXX":
-			t, err := readTextWithDescrFrame(b, false, false) // no lang, no enc
-			if err != nil {
-				return nil, err
-			}
-			result[rawName] = t
-
-		case name[0] == 'W':
-			txt, err := readWFrame(b)
-			if err != nil {
-				return nil, err
-			}
-			result[rawName] = txt
-
-		case name == "COMM" || name == "COM" || name == "USLT" || name == "ULT":
-			t, err := readTextWithDescrFrame(b, true, true) // both lang and enc
-			if err != nil {
-				return nil, fmt.Errorf("could not read %q (%q): %v", name, rawName, err)
-			}
-			result[rawName] = t
-
-		case name == "APIC":
-			p, err := readAPICFrame(b)
-			if err != nil {
-				return nil, err
-			}
-			result[rawName] = p
-
-		case name == "PIC":
-			p, err := readPICFrame(b)
-			if err != nil {
-				return nil, err
-			}
-			result[rawName] = p
-
-		default:
-			result[rawName] = b
-		}
+		result[rawName] = frame.Data
 	}
+
 	return result, nil
 }
 
@@ -445,7 +483,7 @@ func ReadID3v2Tags(r io.ReadSeeker) (Metadata, error) {
 
 var id3v2genreRe = regexp.MustCompile(`(.*[^(]|.* |^)\(([0-9]+)\) *(.*)$`)
 
-//  id3v2genre parse a id3v2 genre tag and expand the numeric genres
+// id3v2genre parse a id3v2 genre tag and expand the numeric genres
 func id3v2genre(genre string) string {
 	c := true
 	for c {
