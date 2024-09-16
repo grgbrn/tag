@@ -1,4 +1,4 @@
-module github.com/dhowden/tag
+module github.com/grgbrn/tag
 
 go 1.20
 
