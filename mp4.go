@@ -377,3 +377,7 @@ func (m metadataMP4) Picture() *Picture {
 	p, _ := v.(*Picture)
 	return p
 }
+
+func (m metadataMP4) Chapters() *[]Chapter {
+	return nil
+}

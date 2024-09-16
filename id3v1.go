@@ -136,9 +136,10 @@ func (m metadataID3v1) Year() int {
 
 func (m metadataID3v1) Track() (int, int) { return m["track"].(int), 0 }
 
-func (m metadataID3v1) AlbumArtist() string { return "" }
-func (m metadataID3v1) Composer() string    { return "" }
-func (metadataID3v1) Disc() (int, int)      { return 0, 0 }
-func (m metadataID3v1) Picture() *Picture   { return nil }
-func (m metadataID3v1) Lyrics() string      { return "" }
-func (m metadataID3v1) Comment() string     { return m["comment"].(string) }
+func (m metadataID3v1) AlbumArtist() string  { return "" }
+func (m metadataID3v1) Composer() string     { return "" }
+func (metadataID3v1) Disc() (int, int)       { return 0, 0 }
+func (m metadataID3v1) Picture() *Picture    { return nil }
+func (m metadataID3v1) Lyrics() string       { return "" }
+func (m metadataID3v1) Comment() string      { return m["comment"].(string) }
+func (m metadataID3v1) Chapters() *[]Chapter { return nil }

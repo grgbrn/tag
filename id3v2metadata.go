@@ -5,6 +5,8 @@
 package tag
 
 import (
+	"cmp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -149,4 +151,39 @@ func (m metadataID3v2) Picture() *Picture {
 		return nil
 	}
 	return v.(*Picture)
+}
+
+func (m metadataID3v2) Chapters() *[]Chapter {
+	chapterFrames := make([]Chapter, 0)
+	for k, v := range m.frames {
+		if strings.HasPrefix(k, "CHAP") {
+			chapterFrames = append(chapterFrames, v.(Chapter))
+		}
+	}
+
+	if len(chapterFrames) == 0 {
+		return nil
+	}
+
+	// read the CTOC frame to determine the correct order of the chapters
+	// XXX is tag suffix preserved? can that be used? if there's no TOC?
+	var toc *ChapterTOC
+	if tocFrame, ok := m.frames["CTOC"]; ok {
+		if tmp, ok := tocFrame.(ChapterTOC); ok {
+			toc = &tmp
+		}
+	}
+
+	if toc != nil {
+		// sort the chapter frames according to the TOC
+		slices.SortFunc(chapterFrames, func(i, j Chapter) int {
+			// find the indices of the ElementID in the TOC
+			// TODO: think about how to handle missing entries here
+			ix1 := slices.Index(toc.Entries, i.ElementID)
+			ix2 := slices.Index(toc.Entries, j.ElementID)
+			return cmp.Compare(ix1, ix2)
+		})
+	}
+
+	return &chapterFrames
 }

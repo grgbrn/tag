@@ -104,6 +104,10 @@ func (m metadataDSF) Comment() string {
 	return m.id3.Comment()
 }
 
+func (m metadataDSF) Chapters() *[]Chapter {
+	return nil
+}
+
 func (m metadataDSF) Raw() map[string]interface{} {
 	return m.id3.Raw()
 }

@@ -264,3 +264,7 @@ func (m *metadataVorbis) Comment() string {
 func (m *metadataVorbis) Picture() *Picture {
 	return m.p
 }
+
+func (m *metadataVorbis) Chapters() *[]Chapter {
+	return nil
+}
